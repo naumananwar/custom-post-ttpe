@@ -98,7 +98,10 @@ require_once CLS_PLUGIN_DIR . 'includes/social-login/google-auth.php';
 require_once CLS_PLUGIN_DIR . 'includes/social-login/facebook-auth.php';
 require_once CLS_PLUGIN_DIR . 'includes/social-login/apple-auth.php';
 require_once CLS_PLUGIN_DIR . 'includes/post-types.php';
-require_once CLS_PLUGIN_DIR . 'includes/shortcodes.php';
+require_once CLS_PLUGIN_DIR . 'includes/shortcodes.php'; // For package display shortcode
+require_once CLS_PLUGIN_DIR . 'includes/shortcodes/dashboard-shortcodes.php'; // For dashboard shortcodes
+require_once CLS_PLUGIN_DIR . 'includes/shortcodes/course-management-shortcodes.php'; // For course management
+require_once CLS_PLUGIN_DIR . 'includes/shortcodes/lesson-management-shortcodes.php'; // For lesson management
 // require CLS_PLUGIN_DIR . 'includes/class-custom-login-subscription.php';
 
 /**
