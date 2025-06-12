@@ -62,32 +62,37 @@ function cls_display_subscription_packages_shortcode( $atts ) {
             $features_raw   = get_post_meta( $post_id, '_cls_package_features', true );
 
             $interval_count_display = $interval_count ? intval($interval_count) : 1;
-            $interval_display = $interval ? esc_html(ucfirst($interval)) : 'Month';
-            if ($interval_count_display > 1) {
-                // basic pluralization
-                $interval_display .= 's';
+            // Ensure interval itself is sane, though it's from meta saved by select.
+            $allowed_intervals = array('day' => 'Day(s)', 'week' => 'Week(s)', 'month' => 'Month(s)', 'year' => 'Year(s)');
+            $interval_label = isset($allowed_intervals[$interval]) ? $allowed_intervals[$interval] : esc_html(ucfirst($interval));
+
+            // If interval_count is 1, use singular form from $allowed_intervals (e.g. "Day" instead of "Day(s)")
+            if ($interval_count_display === 1) {
+                $singular_labels = array('day' => 'Day', 'week' => 'Week', 'month' => 'Month', 'year' => 'Year');
+                $interval_display = isset($singular_labels[$interval]) ? $singular_labels[$interval] : esc_html(ucfirst($interval));
+            } else {
+                $interval_display = $interval_label;
             }
 
-
             ?>
-            <div class="cls-package" id="cls-package-<?php echo $post_id; ?>">
-                <h3><?php the_title(); ?></h3>
+            <div class="cls-package" id="cls-package-<?php echo esc_attr( $post_id ); ?>">
+                <h3><?php echo esc_html( get_the_title() ); ?></h3>
 
                 <div class="cls-package-description">
-                    <?php the_content(); // Package description from the editor ?>
+                    <?php echo wp_kses_post( get_the_content() ); // Using wp_kses_post for content from editor ?>
                 </div>
 
                 <div class="cls-package-price">
                     <?php if ( ! empty( $price ) ) : ?>
-                        <strong>Price:</strong> <?php echo esc_html( $price ); ?> / <?php echo $interval_count_display . ' ' . $interval_display; ?>
+                        <strong><?php esc_html_e( 'Price:', 'custom-login-subscription' ); ?></strong> <?php echo esc_html( $price ); ?> / <?php echo esc_html( $interval_count_display . ' ' . $interval_display ); ?>
                     <?php else : ?>
-                        <strong>Price:</strong> <?php _e( 'Contact us', 'custom-login-subscription' ); ?>
+                        <strong><?php esc_html_e( 'Price:', 'custom-login-subscription' ); ?></strong> <?php esc_html_e( 'Contact us', 'custom-login-subscription' ); ?>
                     <?php endif; ?>
                 </div>
 
                 <?php if ( ! empty( $features_raw ) ) : ?>
                     <div class="cls-package-features">
-                        <h4><?php _e( 'Features:', 'custom-login-subscription' ); ?></h4>
+                        <h4><?php esc_html_e( 'Features:', 'custom-login-subscription' ); ?></h4>
                         <ul>
                             <?php
                             $features_list = explode( "\n", $features_raw );
@@ -100,57 +105,52 @@ function cls_display_subscription_packages_shortcode( $atts ) {
                         </ul>
                     </div>
                 <?php endif; ?>
-                <?php
-                $stripe_price_id = get_post_meta( $post_id, '_cls_stripe_price_id', true );
-                $button_text = __( 'Subscribe', 'custom-login-subscription' );
-                $button_disabled = false;
-                $button_attrs = 'data-package-id="' . esc_attr( $post_id ) . '"';
 
-                if ( defined('CLS_STRIPE_PUBLISHABLE_KEY') && CLS_STRIPE_PUBLISHABLE_KEY !== 'YOUR_STRIPE_PUBLISHABLE_KEY' ) {
+                <?php // Stripe Button
+                $stripe_price_id = get_post_meta( $post_id, '_cls_stripe_price_id', true );
+                $stripe_button_text = __( 'Subscribe with Card', 'custom-login-subscription' );
+                $stripe_button_disabled = false;
+                $stripe_button_attrs = 'data-package-id="' . esc_attr( $post_id ) . '"';
+                $stripe_configured = cls_get_setting('stripe_publishable_key') && cls_get_setting('stripe_secret_key');
+
+                if ( $stripe_configured ) {
                     if ( ! empty( $stripe_price_id ) ) {
-                        $button_attrs .= ' data-stripe-price-id="' . esc_attr( $stripe_price_id ) . '"';
+                        $stripe_button_attrs .= ' data-stripe-price-id="' . esc_attr( $stripe_price_id ) . '"';
                     } else {
-                        $button_text = __( 'Stripe Not Configured for Package', 'custom-login-subscription' );
-                        $button_disabled = true;
+                        $stripe_button_text = __( 'Not Available (Stripe)', 'custom-login-subscription' );
+                        $stripe_button_disabled = true;
                     }
                 } else {
-                    // Stripe keys not configured in plugin settings
-                    // Or handle other payment gateways here in future
-                    $button_text = __( 'Payment Not Configured', 'custom-login-subscription' );
-                    $button_disabled = true;
+                    $stripe_button_text = __( 'Payments Offline', 'custom-login-subscription' );
+                    $stripe_button_disabled = true;
                 }
                 ?>
-                <button class="cls-subscribe-button" <?php echo $button_attrs; ?> <?php if ($button_disabled) echo 'disabled'; ?>>
-                    <?php echo esc_html( $button_text ); ?>
+                <button class="cls-subscribe-button" <?php echo $stripe_button_attrs; ?> <?php if ($stripe_button_disabled) echo 'disabled'; ?>>
+                    <?php echo esc_html( $stripe_button_text ); ?>
                 </button>
 
-                <?php
-                // PayPal Button
+                <?php // PayPal Button
                 $paypal_plan_id = get_post_meta( $post_id, '_cls_paypal_plan_id', true );
                 $paypal_button_text = __( 'Subscribe with PayPal', 'custom-login-subscription' );
                 $paypal_button_disabled = false;
                 $paypal_button_attrs = 'data-package-id="' . esc_attr( $post_id ) . '"';
+                $paypal_configured = cls_get_setting('paypal_client_id') && cls_get_setting('paypal_client_secret');
 
-                if ( defined('CLS_PAYPAL_CLIENT_ID') && CLS_PAYPAL_CLIENT_ID !== 'YOUR_PAYPAL_CLIENT_ID' ) {
+                if ( $paypal_configured ) {
                     if ( ! empty( $paypal_plan_id ) ) {
                         $paypal_button_attrs .= ' data-paypal-plan-id="' . esc_attr( $paypal_plan_id ) . '"';
                     } else {
-                        // $paypal_button_text = __( 'PayPal Not Configured for Package', 'custom-login-subscription' );
-                        // $paypal_button_disabled = true;
-                        // Hide button if not configured for this package
+                        // Hide button if PayPal plan ID not set for this package
                         $paypal_plan_id = null;
                     }
                 } else {
-                    // PayPal keys not configured in plugin settings
-                    // $paypal_button_text = __( 'PayPal Not Configured', 'custom-login-subscription' );
-                    // $paypal_button_disabled = true;
                      // Hide button if PayPal not configured globally
                     $paypal_plan_id = null;
                 }
 
-                if ($paypal_plan_id): // Only show button if PayPal is an option
+                if ($paypal_plan_id && !$paypal_button_disabled): // Only show button if PayPal is an option and not explicitly disabled
                 ?>
-                <button class="cls-paypal-subscribe-button" <?php echo $paypal_button_attrs; ?> <?php if ($paypal_button_disabled) echo 'disabled'; ?> style="margin-top: 10px; background-color: #0070ba;">
+                <button class="cls-paypal-subscribe-button cls-subscribe-button" <?php echo $paypal_button_attrs; ?> style="margin-top: 10px; background-color: #0070ba;">
                     <?php echo esc_html( $paypal_button_text ); ?>
                 </button>
                 <?php endif; ?>

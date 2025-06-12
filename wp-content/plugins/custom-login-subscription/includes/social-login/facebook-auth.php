@@ -19,11 +19,19 @@ class CLS_Facebook_Auth {
      * Renders the "Login with Facebook" button.
      */
     public function render_login_button() {
-        if ( ! defined('CLS_FACEBOOK_APP_ID') || CLS_FACEBOOK_APP_ID === 'YOUR_FACEBOOK_APP_ID' ) {
-            return '<p>Facebook App ID is not configured.</p>';
+        $facebook_app_id = cls_get_setting('facebook_app_id');
+        if ( empty($facebook_app_id) ) {
+            return current_user_can('manage_options') ? '<p>'.esc_html__( '[Admin] Facebook Login is not configured.', 'custom-login-subscription' ).'</p>' : '';
         }
-        // Basic button HTML. Styling can be added later.
-        return '<a href="' . esc_url( home_url( '/?facebook_auth_init=1' ) ) . '" class="cls-facebook-login-button">Login with Facebook</a>';
+
+        if (!defined('CLS_FACEBOOK_REDIRECT_URI')) {
+            error_log('CLS_FACEBOOK_REDIRECT_URI is not defined. Facebook login may fail.');
+            return current_user_can('manage_options') ? '<p>'.esc_html__( '[Admin] Facebook Login redirect URI is not configured.', 'custom-login-subscription' ).'</p>' : '';
+        }
+
+        $auth_init_url = add_query_arg( 'facebook_auth_init', '1', home_url( '/' ) );
+
+        return '<a href="' . esc_url( $auth_init_url ) . '" class="cls-facebook-login-button button">' . esc_html__( 'Login with Facebook', 'custom-login-subscription' ) . '</a>';
     }
 
     /**
@@ -31,8 +39,12 @@ class CLS_Facebook_Auth {
      */
     public function handle_facebook_redirect() {
         if ( isset( $_GET['facebook_auth_init'] ) && $_GET['facebook_auth_init'] == '1' ) {
-            if ( ! defined('CLS_FACEBOOK_APP_ID') || CLS_FACEBOOK_APP_ID === 'YOUR_FACEBOOK_APP_ID' ) {
-                wp_die( 'Facebook App ID is not configured. Please configure it in the plugin settings.' );
+            $facebook_app_id = cls_get_setting('facebook_app_id');
+            if ( empty($facebook_app_id) ) {
+                wp_die( esc_html__( 'Facebook Login is not configured by the site administrator. Cannot initiate OAuth.', 'custom-login-subscription' ) );
+            }
+            if (!defined('CLS_FACEBOOK_REDIRECT_URI')) {
+                 wp_die( esc_html__( 'Facebook Login redirect URI is not configured. Cannot initiate OAuth.', 'custom-login-subscription' ) );
             }
 
             if ( ! session_id() ) {
@@ -42,8 +54,8 @@ class CLS_Facebook_Auth {
             $_SESSION['facebook_oauth_state'] = bin2hex( random_bytes(16) );
 
             $params = array(
-                'client_id'     => CLS_FACEBOOK_APP_ID,
-                'redirect_uri'  => CLS_FACEBOOK_REDIRECT_URI,
+                'client_id'     => $facebook_app_id,
+                'redirect_uri'  => CLS_FACEBOOK_REDIRECT_URI, // Assuming this remains a constant
                 'scope'         => 'email,public_profile',
                 'response_type' => 'code',
                 'state'         => $_SESSION['facebook_oauth_state'],
@@ -71,17 +83,31 @@ class CLS_Facebook_Auth {
         // Verify state for CSRF
         if ( ! isset( $_GET['state'] ) || ! isset( $_SESSION['facebook_oauth_state'] ) || $_GET['state'] !== $_SESSION['facebook_oauth_state'] ) {
             error_log('Facebook OAuth Error: Invalid state parameter. CSRF attempt?');
-            wp_die( 'Invalid state parameter. CSRF attempt?' );
+            wp_die( esc_html__( 'Invalid state parameter. CSRF attempt?', 'custom-login-subscription' ) );
         }
         unset( $_SESSION['facebook_oauth_state'] ); // Clean up state
 
         $code = sanitize_text_field( $_GET['code'] );
 
+        $facebook_app_id = cls_get_setting('facebook_app_id');
+        $facebook_app_secret = cls_get_setting('facebook_app_secret');
+
+        if ( empty($facebook_app_id) || empty($facebook_app_secret) ) {
+            error_log( 'Facebook OAuth Error: App ID or Secret is not configured in settings.' );
+            wp_die( esc_html__( 'Facebook authentication is not properly configured. Missing API credentials.', 'custom-login-subscription' ) );
+            return;
+        }
+        if (!defined('CLS_FACEBOOK_REDIRECT_URI')) {
+            error_log( 'Facebook OAuth Error: CLS_FACEBOOK_REDIRECT_URI is not defined.' );
+            wp_die( esc_html__( 'Facebook authentication redirect URI is not configured.', 'custom-login-subscription' ) );
+            return;
+        }
+
         // Exchange authorization code for an access token
         $token_url = 'https://graph.facebook.com/v12.0/oauth/access_token?' . http_build_query( array(
-            'client_id'     => CLS_FACEBOOK_APP_ID,
-            'client_secret' => CLS_FACEBOOK_APP_SECRET,
-            'redirect_uri'  => CLS_FACEBOOK_REDIRECT_URI,
+            'client_id'     => $facebook_app_id,
+            'client_secret' => $facebook_app_secret,
+            'redirect_uri'  => CLS_FACEBOOK_REDIRECT_URI, // Assuming constant
             'code'          => $code,
         ) );
 
@@ -89,7 +115,7 @@ class CLS_Facebook_Auth {
 
         if ( is_wp_error( $token_response ) ) {
             error_log( 'Facebook Token API Error: ' . $token_response->get_error_message() );
-            wp_die( 'Error exchanging Facebook auth code for token: ' . $token_response->get_error_message() );
+            wp_die( sprintf( esc_html__( 'Error exchanging Facebook auth code for token: %s', 'custom-login-subscription' ), esc_html($token_response->get_error_message()) ) );
             return;
         }
 
@@ -97,9 +123,9 @@ class CLS_Facebook_Auth {
         $token_data = json_decode( $token_body, true );
 
         if ( ! isset( $token_data['access_token'] ) ) {
-            $error_message = isset($token_data['error']['message']) ? $token_data['error']['message'] : 'No access token received.';
+            $error_message = isset($token_data['error']['message']) ? $token_data['error']['message'] : esc_html__('No access token received.', 'custom-login-subscription');
             error_log( 'Facebook Token API Error: ' . $error_message . ' Response: ' . $token_body );
-            wp_die( 'Could not retrieve access token from Facebook. ' . esc_html( $error_message ) );
+            wp_die( sprintf( esc_html__( 'Could not retrieve access token from Facebook. %s', 'custom-login-subscription' ), esc_html( $error_message ) ) );
             return;
         }
 
@@ -114,7 +140,7 @@ class CLS_Facebook_Auth {
 
         if ( is_wp_error( $userinfo_response ) ) {
             error_log( 'Facebook UserInfo API Error: ' . $userinfo_response->get_error_message() );
-            wp_die( 'Error fetching user information from Facebook: ' . $userinfo_response->get_error_message() );
+            wp_die( sprintf( esc_html__( 'Error fetching user information from Facebook: %s', 'custom-login-subscription' ), esc_html($userinfo_response->get_error_message()) ) );
             return;
         }
 
@@ -122,9 +148,9 @@ class CLS_Facebook_Auth {
         $user_info = json_decode( $userinfo_body, true );
 
         if ( ! isset( $user_info['id'] ) ) {
-            $error_message = isset($user_info['error']['message']) ? $user_info['error']['message'] : 'User ID not found.';
+            $error_message = isset($user_info['error']['message']) ? $user_info['error']['message'] : esc_html__('User ID not found.', 'custom-login-subscription');
             error_log( 'Facebook UserInfo API Error: ' . $error_message . ' Response: ' . $userinfo_body );
-            wp_die( 'Could not retrieve user ID from Facebook. ' . esc_html( $error_message ) );
+            wp_die( sprintf( esc_html__( 'Could not retrieve user ID from Facebook. %s', 'custom-login-subscription' ), esc_html( $error_message ) ) );
             return;
         }
 
@@ -140,7 +166,7 @@ class CLS_Facebook_Auth {
             // In a real plugin, you might redirect to a form to ask for email,
             // or if your policy allows, create an account without an email (not standard for WP).
             error_log( 'Facebook Login Error: Email address not provided by Facebook for user ID ' . $facebook_user_id );
-            wp_die( 'An email address is required to create an account. Facebook did not provide one for your profile. Please ensure your Facebook account has a verified email and that you have granted permission to share it.' );
+            wp_die( esc_html__( 'An email address is required to create an account. Facebook did not provide one for your profile. Please ensure your Facebook account has a verified email and that you have granted permission to share it.', 'custom-login-subscription' ) );
             return;
         }
 
@@ -161,7 +187,7 @@ class CLS_Facebook_Auth {
 
             if ( is_wp_error( $user_id ) ) {
                 error_log( 'WordPress User Creation Error (Facebook): ' . $user_id->get_error_message() );
-                wp_die( 'Could not create user: ' . $user_id->get_error_message() );
+                wp_die( sprintf( esc_html__( 'Could not create user: %s', 'custom-login-subscription' ), esc_html($user_id->get_error_message()) ) );
                 return;
             }
 

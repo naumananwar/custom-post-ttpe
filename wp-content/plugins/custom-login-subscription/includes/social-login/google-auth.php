@@ -19,21 +19,24 @@ class CLS_Google_Auth {
      * Renders the "Login with Google" button.
      */
     public function render_login_button() {
-        if ( ! defined('CLS_GOOGLE_CLIENT_ID') || CLS_GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID' ) {
-            return '<p>Google Client ID is not configured.</p>';
+        $google_client_id = cls_get_setting('google_client_id');
+        if ( empty($google_client_id) ) {
+            // Admin should see this on the page where shortcode is, users shouldn't if not configured.
+            // However, for simplicity, a generic message or nothing if not configured.
+            // For a better UX, this check should ideally be done before rendering anything.
+            return current_user_can('manage_options') ? '<p>'.esc_html__( '[Admin] Google Login is not configured.', 'custom-login-subscription' ).'</p>' : '';
         }
-        // Construct the Google OAuth URL
-        $google_oauth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query( array(
-            'client_id'     => CLS_GOOGLE_CLIENT_ID,
-            'redirect_uri'  => CLS_GOOGLE_REDIRECT_URI,
-            'scope'         => 'email profile openid',
-            'response_type' => 'code',
-            'access_type'   => 'offline', // Request refresh token
-            'prompt'        => 'select_account' // Ensures account selection even if logged in
-        ) );
 
-        // Basic button HTML. Styling can be added later.
-        return '<a href="' . esc_url( home_url( '/?google_auth_init=1' ) ) . '" class="cls-google-login-button">Login with Google</a>';
+        if (!defined('CLS_GOOGLE_REDIRECT_URI')) {
+            error_log('CLS_GOOGLE_REDIRECT_URI is not defined. Google login may fail.');
+            return current_user_can('manage_options') ? '<p>'.esc_html__( '[Admin] Google Login redirect URI is not configured.', 'custom-login-subscription' ).'</p>' : '';
+        }
+
+        // The URL itself is constructed for redirect, not direct display, so internal parts don't need esc_html.
+        // esc_url() will be used on the final href.
+        $auth_init_url = add_query_arg( 'google_auth_init', '1', home_url( '/' ) );
+
+        return '<a href="' . esc_url( $auth_init_url ) . '" class="cls-google-login-button button">' . esc_html__( 'Login with Google', 'custom-login-subscription' ) . '</a>';
     }
 
     /**
@@ -41,8 +44,12 @@ class CLS_Google_Auth {
      */
     public function handle_google_redirect() {
         if ( isset( $_GET['google_auth_init'] ) && $_GET['google_auth_init'] == '1' ) {
-            if ( ! defined('CLS_GOOGLE_CLIENT_ID') || CLS_GOOGLE_CLIENT_ID === 'YOUR_GOOGLE_CLIENT_ID' ) {
-                wp_die( 'Google Client ID is not configured. Please configure it in the plugin settings.' );
+            $google_client_id = cls_get_setting('google_client_id');
+            if ( empty($google_client_id) ) {
+                wp_die( esc_html__( 'Google Login is not configured by the site administrator. Cannot initiate OAuth.', 'custom-login-subscription' ) );
+            }
+            if (!defined('CLS_GOOGLE_REDIRECT_URI')) {
+                 wp_die( esc_html__( 'Google Login redirect URI is not configured. Cannot initiate OAuth.', 'custom-login-subscription' ) );
             }
 
             // Generate state for CSRF protection (optional but recommended)
@@ -52,7 +59,7 @@ class CLS_Google_Auth {
             // $_SESSION['google_oauth_state'] = bin2hex( random_bytes(16) );
 
             $params = array(
-                'client_id'     => CLS_GOOGLE_CLIENT_ID,
+                'client_id'     => $google_client_id,
                 'redirect_uri'  => CLS_GOOGLE_REDIRECT_URI,
                 'scope'         => 'email profile openid',
                 'response_type' => 'code',
@@ -88,13 +95,27 @@ class CLS_Google_Auth {
         $code = sanitize_text_field( $_GET['code'] );
 
         // Exchange authorization code for an access token
+        $google_client_id = cls_get_setting('google_client_id');
+        $google_client_secret = cls_get_setting('google_client_secret');
+
+        if ( empty($google_client_id) || empty($google_client_secret) ) {
+            error_log( 'Google OAuth Error: Client ID or Secret is not configured in settings.' );
+            wp_die( esc_html__( 'Google authentication is not properly configured. Missing API credentials.', 'custom-login-subscription' ) );
+            return;
+        }
+         if (!defined('CLS_GOOGLE_REDIRECT_URI')) {
+            error_log( 'Google OAuth Error: CLS_GOOGLE_REDIRECT_URI is not defined.' );
+            wp_die( esc_html__( 'Google authentication redirect URI is not configured.', 'custom-login-subscription' ) );
+            return;
+        }
+
         $token_response = wp_remote_post( 'https://oauth2.googleapis.com/token', array(
             'method'  => 'POST',
             'headers' => array( 'Content-Type' => 'application/x-www-form-urlencoded' ),
             'body'    => array(
                 'code'          => $code,
-                'client_id'     => CLS_GOOGLE_CLIENT_ID,
-                'client_secret' => CLS_GOOGLE_CLIENT_SECRET,
+                'client_id'     => $google_client_id,
+                'client_secret' => $google_client_secret,
                 'redirect_uri'  => CLS_GOOGLE_REDIRECT_URI,
                 'grant_type'    => 'authorization_code',
             ),
@@ -103,7 +124,7 @@ class CLS_Google_Auth {
 
         if ( is_wp_error( $token_response ) ) {
             error_log( 'Google Token API Error: ' . $token_response->get_error_message() );
-            wp_die( 'Error exchanging Google auth code for token: ' . $token_response->get_error_message() );
+            wp_die( sprintf(esc_html__( 'Error exchanging Google auth code for token: %s', 'custom-login-subscription' ), esc_html($token_response->get_error_message()) ) );
             return;
         }
 
@@ -112,7 +133,7 @@ class CLS_Google_Auth {
 
         if ( ! isset( $token_data['access_token'] ) ) {
             error_log( 'Google Token API Error: No access token received. Response: ' . $token_body );
-            wp_die( 'Could not retrieve access token from Google. Response: ' . esc_html( $token_body ) );
+            wp_die( sprintf(esc_html__( 'Could not retrieve access token from Google. Response: %s', 'custom-login-subscription' ), esc_html( $token_body ) ) );
             return;
         }
 
@@ -125,7 +146,7 @@ class CLS_Google_Auth {
 
         if ( is_wp_error( $userinfo_response ) ) {
             error_log( 'Google UserInfo API Error: ' . $userinfo_response->get_error_message() );
-            wp_die( 'Error fetching user information from Google: ' . $userinfo_response->get_error_message() );
+            wp_die( sprintf(esc_html__( 'Error fetching user information from Google: %s', 'custom-login-subscription' ), esc_html($userinfo_response->get_error_message()) ) );
             return;
         }
 
@@ -134,7 +155,7 @@ class CLS_Google_Auth {
 
         if ( ! isset( $user_info['email'] ) ) {
             error_log( 'Google UserInfo API Error: Email not found in user info. Response: ' . $userinfo_body );
-            wp_die( 'Could not retrieve user email from Google. Response: ' . esc_html( $userinfo_body ) );
+            wp_die( sprintf(esc_html__( 'Could not retrieve user email from Google. Response: %s', 'custom-login-subscription' ), esc_html( $userinfo_body ) ) );
             return;
         }
 
@@ -161,7 +182,7 @@ class CLS_Google_Auth {
 
             if ( is_wp_error( $user_id ) ) {
                 error_log( 'WordPress User Creation Error: ' . $user_id->get_error_message() );
-                wp_die( 'Could not create user: ' . $user_id->get_error_message() );
+                wp_die( sprintf(esc_html__( 'Could not create user: %s', 'custom-login-subscription' ), esc_html($user_id->get_error_message()) ) );
                 return;
             }
 

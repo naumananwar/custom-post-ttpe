@@ -38,9 +38,19 @@ class CLS_Apple_Auth {
         $_SESSION['apple_auth_state'] = $state;
 
 
+        $client_id = cls_get_setting('apple_service_id', 'YOUR_APPLE_SERVICE_ID');
+        // CLS_APPLE_REDIRECT_URI is assumed to be a constant for now.
+        $redirect_uri = defined('CLS_APPLE_REDIRECT_URI') ? CLS_APPLE_REDIRECT_URI : home_url('/apple-auth-callback');
+        if (empty($client_id) || $client_id === 'YOUR_APPLE_SERVICE_ID') {
+             error_log('Apple Sign In: Client ID (Service ID) not configured in settings.');
+        }
+         if (!defined('CLS_APPLE_REDIRECT_URI')) {
+            error_log('Apple Sign In: CLS_APPLE_REDIRECT_URI constant is not defined.');
+        }
+
         wp_localize_script( 'cls-apple-auth', 'cls_apple_auth_params', array(
-            'client_id'    => defined('CLS_APPLE_CLIENT_ID') ? CLS_APPLE_CLIENT_ID : 'YOUR_APPLE_SERVICE_ID',
-            'redirect_uri' => defined('CLS_APPLE_REDIRECT_URI') ? CLS_APPLE_REDIRECT_URI : home_url('/apple-auth-callback'),
+            'client_id'    => $client_id,
+            'redirect_uri' => $redirect_uri,
             'state'        => $state, // Pass the generated state to JS
             'use_popup'    => 'false', // Apple recommends redirect flow for web
         ) );
@@ -53,13 +63,18 @@ class CLS_Apple_Auth {
      * For now, a simple button that triggers the JS.
      */
     public function render_login_button() {
-        if ( ! defined('CLS_APPLE_CLIENT_ID') || CLS_APPLE_CLIENT_ID === 'YOUR_APPLE_SERVICE_ID' ) {
-            return '<p>Sign in with Apple is not configured.</p>';
+        $client_id = cls_get_setting('apple_service_id');
+        $team_id = cls_get_setting('apple_team_id');
+        $key_id = cls_get_setting('apple_key_id');
+        // $private_key = cls_get_setting('apple_private_key'); // Not directly used in button rendering decision usually
+
+        if ( empty($client_id) || empty($team_id) || empty($key_id) ) {
+             return current_user_can('manage_options') ? '<p>'.esc_html__( '[Admin] Sign in with Apple is not fully configured (missing Service ID, Team ID, or Key ID).', 'custom-login-subscription' ).'</p>' : '';
         }
-        // Apple provides official button styles. This is a placeholder.
-        // Actual implementation should use CSS to style it according to Apple's guidelines.
+
         // The `id` is important for the JS to find the button.
-        return '<button id="cls-apple-signin-button" class="cls-apple-login-button" style="background-color: #000; color: #fff; padding: 10px 20px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer;">Sign in with Apple</button>';
+        // Apple has specific styling guidelines. This is a basic button.
+        return '<button id="cls-apple-signin-button" class="cls-apple-login-button button" style="background-color: #000; color: #fff; padding: 10px 20px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer;">' . esc_html__( 'Sign in with Apple', 'custom-login-subscription' ) . '</button>';
     }
 
     /**
@@ -81,7 +96,7 @@ class CLS_Apple_Auth {
         // }
         // if ( !isset($_POST['state']) || !isset($_SESSION['apple_auth_state']) || $_POST['state'] !== $_SESSION['apple_auth_state'] ) {
         //     error_log('Apple Auth Error: Invalid state parameter. CSRF might be attempted.');
-        //     wp_die('Invalid state. CSRF protection mismatch.');
+        //     wp_die( esc_html__('Invalid state. CSRF protection mismatch.', 'custom-login-subscription') );
         // }
         // unset($_SESSION['apple_auth_state']); // Clean up
 
@@ -100,20 +115,27 @@ class CLS_Apple_Auth {
 
         if ( ! $decoded_token || ! isset( $decoded_token->sub ) ) {
             error_log('Apple Auth Error: Invalid or undecodable ID token. Raw token: ' . $id_token);
-            wp_die('Authentication with Apple failed. Could not validate token.');
+            wp_die( esc_html__('Authentication with Apple failed. Could not validate token.', 'custom-login-subscription') );
+            return;
+        }
+
+        $apple_client_id = cls_get_setting('apple_service_id');
+        if(empty($apple_client_id)) {
+            error_log('Apple Auth Error: Apple Service ID (Client ID) is not configured in settings.');
+            wp_die( esc_html__('Apple authentication is not properly configured (missing Client ID).', 'custom-login-subscription') );
             return;
         }
 
         // Verify 'iss' and 'aud' claims (simplified)
-        if ( $decoded_token->iss !== 'https://appleid.apple.com' || $decoded_token->aud !== CLS_APPLE_CLIENT_ID ) {
-            error_log('Apple Auth Error: Token issuer or audience mismatch. Decoded: ' . print_r($decoded_token, true));
-            wp_die('Apple token validation failed (issuer/audience).');
+        if ( $decoded_token->iss !== 'https://appleid.apple.com' || $decoded_token->aud !== $apple_client_id ) {
+            error_log('Apple Auth Error: Token issuer or audience mismatch. Decoded: ' . print_r($decoded_token, true) . ' Expected AUD: ' . $apple_client_id);
+            wp_die( esc_html__('Apple token validation failed (issuer/audience).', 'custom-login-subscription') );
             return;
         }
         // Check 'exp' claim
         if ( time() > $decoded_token->exp ) {
             error_log('Apple Auth Error: Token expired. Decoded: ' . print_r($decoded_token, true));
-            wp_die('Apple token has expired.');
+            wp_die( esc_html__('Apple token has expired.', 'custom-login-subscription') );
             return;
         }
 
@@ -142,7 +164,7 @@ class CLS_Apple_Auth {
             // If email is still empty, this is problematic. Apple should provide it in token or user field if scope requested.
             // It might be a private relay email.
             error_log("Apple Auth Error: Email not found for user {$apple_user_id}. Token: " . print_r($decoded_token, true) . " POST: " . print_r($_POST, true));
-            wp_die('Could not retrieve email from Apple. Please ensure you authorize email sharing.');
+            wp_die( esc_html__('Could not retrieve email from Apple. Please ensure you authorize email sharing.', 'custom-login-subscription') );
             return;
         }
 
@@ -173,7 +195,7 @@ class CLS_Apple_Auth {
 
             if ( is_wp_error( $user_id ) ) {
                 error_log( 'WordPress User Creation Error (Apple): ' . $user_id->get_error_message() );
-                wp_die( 'Could not create user: ' . $user_id->get_error_message() );
+                wp_die( sprintf( esc_html__( 'Could not create user: %s', 'custom-login-subscription' ), esc_html($user_id->get_error_message()) ) );
                 return;
             }
 

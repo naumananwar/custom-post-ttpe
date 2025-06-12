@@ -22,27 +22,12 @@ define( 'CLS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'CLS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'CLS_PLUGIN_VERSION', '1.0.0' );
 
-// Google API Credentials - Replace with your actual credentials
-define('CLS_GOOGLE_CLIENT_ID', 'YOUR_GOOGLE_CLIENT_ID');
-define('CLS_GOOGLE_CLIENT_SECRET', 'YOUR_GOOGLE_CLIENT_SECRET');
-define('CLS_GOOGLE_REDIRECT_URI', home_url('/google-auth-callback')); // Example callback URL
-
-// Facebook API Credentials - Replace with your actual credentials
-define('CLS_FACEBOOK_APP_ID', 'YOUR_FACEBOOK_APP_ID');
-define('CLS_FACEBOOK_APP_SECRET', 'YOUR_FACEBOOK_APP_SECRET');
-define('CLS_FACEBOOK_REDIRECT_URI', home_url('/facebook-auth-callback')); // Example callback URL
-
-// Apple Sign In Credentials - Replace with your actual credentials
-define('CLS_APPLE_CLIENT_ID', 'YOUR_APPLE_SERVICE_ID'); // e.g., com.example.webapp
-define('CLS_APPLE_TEAM_ID', 'YOUR_APPLE_TEAM_ID');
-define('CLS_APPLE_KEY_ID', 'YOUR_APPLE_KEY_ID');
-define('CLS_APPLE_PRIVATE_KEY_PATH', 'path/to/your/AuthKey_XXXXXX.p8'); // Or the key content itself
+// Social Login Redirect URIs - These are less likely to be changed by users from an admin panel
+// and are more tied to the application registration with the provider.
+define('CLS_GOOGLE_REDIRECT_URI', home_url('/google-auth-callback'));
+define('CLS_FACEBOOK_REDIRECT_URI', home_url('/facebook-auth-callback'));
 define('CLS_APPLE_REDIRECT_URI', home_url('/apple-auth-callback'));
 
-// Stripe API Credentials - Replace with your actual credentials
-define('CLS_STRIPE_PUBLISHABLE_KEY', 'YOUR_STRIPE_PUBLISHABLE_KEY');
-define('CLS_STRIPE_SECRET_KEY', 'YOUR_STRIPE_SECRET_KEY');
-define('CLS_STRIPE_WEBHOOK_SECRET', 'YOUR_STRIPE_WEBHOOK_SECRET'); // For webhook handling later
 
 // Include Stripe PHP library autoloader
 if ( file_exists( CLS_PLUGIN_DIR . 'vendor/stripe/stripe-php/init.php' ) ) {
@@ -54,17 +39,32 @@ if ( file_exists( CLS_PLUGIN_DIR . 'vendor/stripe/stripe-php/init.php' ) ) {
     error_log('Stripe PHP library not found. Please install it in vendor/stripe/stripe-php/');
 }
 
-// PayPal API Credentials - Replace with your actual credentials
-define('CLS_PAYPAL_CLIENT_ID', 'YOUR_PAYPAL_CLIENT_ID');
-define('CLS_PAYPAL_CLIENT_SECRET', 'YOUR_PAYPAL_CLIENT_SECRET');
-define('CLS_PAYPAL_MODE', 'sandbox'); // 'sandbox' or 'live'
-define('CLS_PAYPAL_WEBHOOK_ID', 'YOUR_PAYPAL_WEBHOOK_ID'); // For webhook verification later
+// Note: API Keys for Google, Facebook, Apple, Stripe, PayPal are now managed via the Settings page
+// and retrieved using cls_get_setting().
+
+/**
+ * Helper function to get plugin settings.
+ *
+ * @param string $key The key of the setting to retrieve.
+ * @param mixed  $default Optional. Default value to return if the key is not found.
+ * @return mixed The value of the setting, or $default if not found.
+ */
+function cls_get_setting( $key, $default = null ) {
+    $options = get_option( 'cls_plugin_settings' );
+    return isset( $options[$key] ) ? $options[$key] : $default;
+}
+
+// Include User Roles functionality
+require_once CLS_PLUGIN_DIR . 'includes/user-roles.php';
 
 /**
  * The code that runs during plugin activation.
  */
 function activate_custom_login_subscription() {
     // Activation code (e.g., creating custom tables, setting default options)
+    cls_add_custom_user_roles(); // Add custom roles
+    flush_rewrite_rules(); // Important after CPT registration and role changes
+    cls_schedule_expiration_warnings_cron_job(); // Schedule daily cron
 }
 register_activation_hook( __FILE__, 'activate_custom_login_subscription' );
 
@@ -73,8 +73,22 @@ register_activation_hook( __FILE__, 'activate_custom_login_subscription' );
  */
 function deactivate_custom_login_subscription() {
     // Deactivation code (e.g., cleaning up options, transients)
+    cls_remove_custom_user_roles(); // Remove custom roles
+    wp_clear_scheduled_hook('cls_daily_expiration_warnings_event'); // Unschedule daily cron
+    flush_rewrite_rules(); // Clean up rewrite rules
 }
 register_deactivation_hook( __FILE__, 'deactivate_custom_login_subscription' );
+
+/**
+ * Schedules the daily cron job for sending expiration warnings.
+ */
+function cls_schedule_expiration_warnings_cron_job() { // Renamed to avoid conflict if a hook has same name
+    if ( ! wp_next_scheduled( 'cls_daily_expiration_warnings_event' ) ) {
+        wp_schedule_event( time(), 'daily', 'cls_daily_expiration_warnings_event' );
+    }
+}
+// Can also be hooked to 'init' if preferred, but activation is fine for initial setup.
+// add_action('init', 'cls_schedule_expiration_warnings_cron_job');
 
 /**
  * The core plugin class that is used to define internationalization,
@@ -99,7 +113,8 @@ function cls_enqueue_frontend_styles_scripts() { // Renamed function for clarity
     );
 
     // Enqueue Stripe.js and our custom Stripe checkout script
-    if ( defined('CLS_STRIPE_PUBLISHABLE_KEY') && CLS_STRIPE_PUBLISHABLE_KEY !== 'YOUR_STRIPE_PUBLISHABLE_KEY' ) {
+    $stripe_publishable_key = cls_get_setting('stripe_publishable_key');
+    if ( !empty($stripe_publishable_key) ) {
         wp_enqueue_script( 'stripe-js', 'https://js.stripe.com/v3/', array(), null, true );
 
         wp_enqueue_script(
@@ -114,7 +129,7 @@ function cls_enqueue_frontend_styles_scripts() { // Renamed function for clarity
             'cls-stripe-checkout',
             'cls_stripe_params',
             array(
-                'publishable_key' => CLS_STRIPE_PUBLISHABLE_KEY,
+                'publishable_key' => $stripe_publishable_key,
                 'ajax_url'        => admin_url( 'admin-ajax.php' ),
                 'nonce'           => wp_create_nonce( 'cls_stripe_checkout_nonce' ),
             )
@@ -122,7 +137,9 @@ function cls_enqueue_frontend_styles_scripts() { // Renamed function for clarity
     }
 
     // Enqueue PayPal checkout script if PayPal is configured
-    if ( defined('CLS_PAYPAL_CLIENT_ID') && CLS_PAYPAL_CLIENT_ID !== 'YOUR_PAYPAL_CLIENT_ID' && defined('CLS_PAYPAL_MODE') && CLS_PAYPAL_MODE !== '' ) {
+    $paypal_client_id = cls_get_setting('paypal_client_id');
+    $paypal_mode = cls_get_setting('paypal_mode');
+    if ( !empty($paypal_client_id) && !empty($paypal_mode) ) {
         wp_enqueue_script(
             'cls-paypal-checkout',
             CLS_PLUGIN_URL . 'assets/js/paypal-checkout.js',
@@ -146,6 +163,10 @@ add_action( 'wp_enqueue_scripts', 'cls_enqueue_frontend_styles_scripts' ); // Ad
 require_once CLS_PLUGIN_DIR . 'includes/payment-gateways/stripe-handler.php';
 require_once CLS_PLUGIN_DIR . 'includes/payment-gateways/paypal-handler.php';
 require_once CLS_PLUGIN_DIR . 'includes/user-profile.php';
+if ( is_admin() ) { // Admin-specific includes
+    require_once CLS_PLUGIN_DIR . 'includes/admin/settings-page.php';
+}
+require_once CLS_PLUGIN_DIR . 'includes/email-handler.php';
 
 /**
  * Begins execution of the plugin.

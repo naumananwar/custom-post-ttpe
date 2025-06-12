@@ -74,7 +74,7 @@ function cls_create_paypal_subscription_ajax_handler() {
     check_ajax_referer( 'cls_paypal_checkout_nonce', 'nonce' );
 
     if ( !is_user_logged_in() ) {
-        wp_send_json_error( array( 'message' => __( 'You must be logged in to subscribe.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'You must be logged in to subscribe.', 'custom-login-subscription' ) ) );
         return;
     }
 
@@ -82,22 +82,20 @@ function cls_create_paypal_subscription_ajax_handler() {
     $package_id = isset( $_POST['package_id'] ) ? intval( $_POST['package_id'] ) : null;
 
     if ( ! $paypal_plan_id || ! $package_id ) {
-        wp_send_json_error( array( 'message' => __( 'Invalid PayPal plan or package information.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'Invalid PayPal plan or package information.', 'custom-login-subscription' ) ) );
         return;
     }
 
     $access_token = cls_get_paypal_access_token();
     if ( ! $access_token ) {
-        wp_send_json_error( array( 'message' => __( 'Could not authenticate with PayPal. Please try again later.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'Could not authenticate with PayPal. Please try again later.', 'custom-login-subscription' ) ) );
         return;
     }
 
     $current_user = wp_get_current_user();
     $api_url = cls_get_paypal_api_base_url() . '/v1/billing/subscriptions';
 
-    // For PayPal, start_time should be in the future, e.g. 5-10 minutes from now.
-    // YYYY-MM-DDTHH:MM:SSZ format.
-    $start_time = gmdate( "Y-m-d\TH:i:s\Z", time() + (5 * 60) ); // 5 minutes in future
+    $start_time = gmdate( "Y-m-d\TH:i:s\Z", time() + (5 * 60) );
 
     $payload = array(
         'plan_id'    => $paypal_plan_id,
@@ -116,13 +114,10 @@ function cls_create_paypal_subscription_ajax_handler() {
             'return_url'          => add_query_arg( array(
                                         'action' => 'cls_paypal_return',
                                         'package_id' => $package_id,
-                                        // 'paypal_sub_id' will be appended by PayPal: BA-XXXXXXXXXXXXX (Billing Agreement ID)
-                                        // or I-XXXXXXXXXXXXX (Subscription ID in newer API versions)
-                                        // We will use 'subscription_id' from query param that PayPal adds.
-                                    ), home_url('/paypal-subscription-success/') ), // Page slug
-            'cancel_url'          => home_url('/paypal-subscription-canceled/'), // Page slug
+                                    ), home_url('/paypal-subscription-success/') ),
+            'cancel_url'          => home_url('/paypal-subscription-canceled/'),
         ),
-        'custom_id' => $current_user->ID . '|' . $package_id, // Store WP User ID and Package ID
+        'custom_id' => $current_user->ID . '|' . $package_id,
     );
 
     $response = wp_remote_post( $api_url, array(
@@ -130,7 +125,6 @@ function cls_create_paypal_subscription_ajax_handler() {
         'headers' => array(
             'Content-Type'  => 'application/json',
             'Authorization' => 'Bearer ' . $access_token,
-            // 'PayPal-Request-Id' => 'SOME_UNIQUE_ID_PER_REQUEST' // Optional for idempotency
         ),
         'body'    => json_encode( $payload ),
         'timeout' => 60,
@@ -138,7 +132,7 @@ function cls_create_paypal_subscription_ajax_handler() {
 
     if ( is_wp_error( $response ) ) {
         error_log('PayPal Subscription API Error: ' . $response->get_error_message());
-        wp_send_json_error( array( 'message' => 'PayPal API Error: ' . $response->get_error_message() ) );
+        wp_send_json_error( array( 'message' => sprintf(esc_html__('PayPal API Error: %s', 'custom-login-subscription'), esc_html($response->get_error_message())) ) );
         return;
     }
 
@@ -146,31 +140,27 @@ function cls_create_paypal_subscription_ajax_handler() {
     $response_body = wp_remote_retrieve_body( $response );
     $subscription_data = json_decode( $response_body, true );
 
-    if ( $response_code === 200 || $response_code === 201 ) { // 201 Created for subscriptions
+    if ( $response_code === 200 || $response_code === 201 ) {
         if ( isset( $subscription_data['links'] ) ) {
             foreach ( $subscription_data['links'] as $link ) {
                 if ( $link['rel'] === 'approve' || $link['rel'] === 'payer-action' ) {
-                    // Store PayPal subscription ID temporarily to associate with user upon return if needed,
-                    // or rely on webhook / custom_id
-                    // update_user_meta($current_user->ID, '_cls_pending_paypal_subscription_id', $subscription_data['id']);
                     wp_send_json_success( array( 'approve_url' => $link['href'], 'paypal_sub_id' => $subscription_data['id'] ) );
                     return;
                 }
             }
         }
-        // If no approve link found but successful response
         error_log('PayPal Subscription: Approve link not found in response. Data: ' . $response_body);
-        wp_send_json_error( array( 'message' => __( 'Could not retrieve PayPal approval link. Response: ', 'custom-login-subscription' ) . $response_body ) );
+        wp_send_json_error( array( 'message' => sprintf(esc_html__( 'Could not retrieve PayPal approval link. Response: %s', 'custom-login-subscription' ), esc_html($response_body) ) ));
 
     } else {
         error_log('PayPal Subscription API Error: Failed to create subscription. Code: ' . $response_code . ' Body: ' . $response_body);
-        $error_message = __( 'Failed to create PayPal subscription.', 'custom-login-subscription' );
+        $user_facing_error_message = esc_html__( 'Failed to create PayPal subscription.', 'custom-login-subscription' );
         if(isset($subscription_data['details'][0]['description'])){
-             $error_message .= ' Details: ' . $subscription_data['details'][0]['description'];
+             $user_facing_error_message .= ' ' . sprintf(esc_html__('Details: %s', 'custom-login-subscription'), esc_html($subscription_data['details'][0]['description']));
         } else if (isset($subscription_data['message'])) {
-             $error_message .= ' Details: ' . $subscription_data['message'];
+             $user_facing_error_message .= ' ' . sprintf(esc_html__('Details: %s', 'custom-login-subscription'), esc_html($subscription_data['message']));
         }
-        wp_send_json_error( array( 'message' => $error_message, 'raw_response' => $response_body ) );
+        wp_send_json_error( array( 'message' => $user_facing_error_message, 'raw_response' => $response_body ) ); // raw_response for debugging, not for user display
     }
 }
 add_action( 'wp_ajax_cls_create_paypal_subscription', 'cls_create_paypal_subscription_ajax_handler' );
@@ -178,9 +168,6 @@ add_action( 'wp_ajax_cls_create_paypal_subscription', 'cls_create_paypal_subscri
 
 /**
  * Helper function to get a WordPress user by PayPal Subscription ID.
- *
- * @param string $paypal_subscription_id The PayPal Subscription ID.
- * @return WP_User|false The user object if found, false otherwise.
  */
 function cls_get_user_by_paypal_subscription_id( $paypal_subscription_id ) {
     if ( empty( $paypal_subscription_id ) ) {
@@ -203,7 +190,7 @@ function cls_register_paypal_webhook_endpoint() {
     register_rest_route( 'custom-login-subscription/v1', '/paypal-webhook', array(
         'methods'  => 'POST',
         'callback' => 'cls_handle_paypal_webhook',
-        'permission_callback' => '__return_true', // Open endpoint, security by PayPal signature
+        'permission_callback' => '__return_true',
     ) );
 }
 add_action( 'rest_api_init', 'cls_register_paypal_webhook_endpoint' );
@@ -211,22 +198,16 @@ add_action( 'rest_api_init', 'cls_register_paypal_webhook_endpoint' );
 
 /**
  * Verifies a PayPal webhook signature.
- *
- * @param WP_REST_Request $request The REST API request object.
- * @param string $raw_body The raw request body.
- * @return bool True if verified, false otherwise.
  */
 function cls_verify_paypal_webhook_signature( WP_REST_Request $request, $raw_body ) {
-    // $client_id = cls_get_setting('paypal_client_id'); // Already fetched in cls_get_paypal_access_token
-    // $client_secret = cls_get_setting('paypal_client_secret'); // Already fetched in cls_get_paypal_access_token
     $webhook_id = cls_get_setting('paypal_webhook_id');
 
-    if ( empty($webhook_id) ) { // Client ID/Secret checked by cls_get_paypal_access_token
+    if ( empty($webhook_id) ) {
         error_log('PayPal Webhook Error: Missing Webhook ID for verification in settings.');
         return false;
     }
 
-    $access_token = cls_get_paypal_access_token(); // We need a fresh token
+    $access_token = cls_get_paypal_access_token();
     if ( ! $access_token ) {
         error_log('PayPal Webhook Error: Could not get access token for signature verification.');
         return false;
@@ -239,7 +220,7 @@ function cls_verify_paypal_webhook_signature( WP_REST_Request $request, $raw_bod
         'transmission_sig'  => $request->get_header('paypal-transmission-sig'),
         'transmission_time' => $request->get_header('paypal-transmission-time'),
         'webhook_id'        => $webhook_id,
-        'webhook_event'     => json_decode($raw_body) // Must be JSON object, not string
+        'webhook_event'     => json_decode($raw_body)
     );
 
     $verify_url = cls_get_paypal_api_base_url() . '/v1/notifications/verify-webhook-signature';
@@ -272,17 +253,14 @@ function cls_verify_paypal_webhook_signature( WP_REST_Request $request, $raw_bod
 
 /**
  * Handles incoming PayPal webhooks.
- *
- * @param WP_REST_Request $request The REST API request object.
- * @return WP_REST_Response
  */
 function cls_handle_paypal_webhook( WP_REST_Request $request ) {
     $raw_body = $request->get_body();
-    $event_body = json_decode( $raw_body ); // For accessing event details
+    $event_body = json_decode( $raw_body );
 
     if ( ! cls_verify_paypal_webhook_signature( $request, $raw_body ) ) {
         error_log('PayPal Webhook Error: Signature verification failed.');
-        return new WP_REST_Response( array( 'error' => 'Signature verification failed' ), 403 );
+        return new WP_REST_Response( array( 'error' => esc_html__('Signature verification failed', 'custom-login-subscription') ), 403 );
     }
 
     $event_type = isset( $event_body->event_type ) ? $event_body->event_type : null;
@@ -290,7 +268,7 @@ function cls_handle_paypal_webhook( WP_REST_Request $request ) {
 
     if ( ! $event_type || ! $resource ) {
         error_log('PayPal Webhook Error: Invalid event structure. Event Type or Resource missing.');
-        return new WP_REST_Response( array( 'error' => 'Invalid event structure' ), 400 );
+        return new WP_REST_Response( array( 'error' => esc_html__('Invalid event structure', 'custom-login-subscription') ), 400 );
     }
 
     error_log("PayPal Webhook Received: Event Type: {$event_type}");
@@ -320,7 +298,6 @@ function cls_handle_paypal_webhook( WP_REST_Request $request ) {
                 }
                 update_user_meta( $wp_user_id, '_cls_payment_gateway', 'paypal' );
 
-                // Send email notification
                 $user_info = get_userdata($wp_user_id);
                 if ($user_info) {
                     $context_data = [
@@ -341,12 +318,10 @@ function cls_handle_paypal_webhook( WP_REST_Request $request ) {
             break;
 
         case 'PAYMENT.SALE.COMPLETED':
-            // This event is for a payment related to a subscription (billing_agreement_id)
             $paypal_subscription_id = isset($resource->billing_agreement_id) ? $resource->billing_agreement_id : null;
             if ( $paypal_subscription_id ) {
                 $user = cls_get_user_by_paypal_subscription_id( $paypal_subscription_id );
                 if ( $user ) {
-                    // Fetch subscription details to get the next billing date
                     $access_token = cls_get_paypal_access_token();
                     if ($access_token) {
                         $sub_url = cls_get_paypal_api_base_url() . '/v1/billing/subscriptions/' . $paypal_subscription_id;
@@ -364,15 +339,6 @@ function cls_handle_paypal_webhook( WP_REST_Request $request ) {
                     }
                     update_user_meta( $user->ID, '_cls_subscription_status', 'active' );
 
-                    // Send renewal email (Placeholder - consider if a specific 'renewal_success' email is needed or if 'successful_subscription' is okay)
-                    // $context_data = [
-                    //     'user_id'         => $user->ID,
-                    //     'package_id'      => get_user_meta($user->ID, '_cls_subscription_package_id', true),
-                    //     'subscription_id' => $paypal_subscription_id,
-                    //     'end_date'        => get_user_meta($user->ID, '_cls_subscription_end_date', true),
-                    // ];
-                    // cls_send_notification_email($user->user_email, 'subscription_renewed', $context_data); // Or a generic success one
-
                     do_action('cls_subscription_renewed', $user->ID, $paypal_subscription_id);
                     error_log("PayPal Webhook: Processed PAYMENT.SALE.COMPLETED for User ID {$user->ID}, PayPal Sub ID {$paypal_subscription_id}");
                 } else {
@@ -389,11 +355,10 @@ function cls_handle_paypal_webhook( WP_REST_Request $request ) {
                 $user = cls_get_user_by_paypal_subscription_id( $paypal_subscription_id );
                 if ( $user ) {
                     update_user_meta( $user->ID, '_cls_subscription_status', 'canceled' );
-                    if (isset($resource->status_update_time)) { // When the cancellation was processed
+                    if (isset($resource->status_update_time)) {
                          update_user_meta( $user->ID, '_cls_subscription_end_date', strtotime($resource->status_update_time) );
                     }
 
-                    // Send cancellation email
                     $context_data = [
                         'user_id'         => $user->ID,
                         'package_id'      => get_user_meta($user->ID, '_cls_subscription_package_id', true),
@@ -409,10 +374,6 @@ function cls_handle_paypal_webhook( WP_REST_Request $request ) {
                 }
             }
             break;
-
-        // TODO: Handle BILLING.SUBSCRIPTION.EXPIRED, BILLING.SUBSCRIPTION.SUSPENDED etc.
-        // case 'BILLING.SUBSCRIPTION.SUSPENDED':
-        // case 'BILLING.SUBSCRIPTION.EXPIRED':
 
         default:
             error_log( 'PayPal Webhook: Received unhandled event type: ' . $event_type );

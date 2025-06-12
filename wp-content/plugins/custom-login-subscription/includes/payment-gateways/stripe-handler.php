@@ -20,13 +20,13 @@ function cls_create_stripe_checkout_session_ajax_handler() {
 
     // Check if Stripe keys are set
     if ( empty($stripe_secret_key) || empty($stripe_publishable_key) ) {
-        wp_send_json_error( array( 'message' => __( 'Stripe is not configured correctly by the site administrator.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'Stripe is not configured correctly by the site administrator.', 'custom-login-subscription' ) ) );
         return;
     }
 
     // Check if Stripe PHP SDK is loaded
     if ( !class_exists('\Stripe\Stripe') ) {
-        wp_send_json_error( array( 'message' => __( 'Stripe PHP library not found.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'Stripe PHP library not found.', 'custom-login-subscription' ) ) );
         return;
     }
 
@@ -34,13 +34,13 @@ function cls_create_stripe_checkout_session_ajax_handler() {
     $package_id = isset( $_POST['package_id'] ) ? intval( $_POST['package_id'] ) : null;
 
     if ( ! $stripe_price_id || ! $package_id ) {
-        wp_send_json_error( array( 'message' => __( 'Invalid package information provided.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'Invalid package information provided.', 'custom-login-subscription' ) ) );
         return;
     }
 
     // Ensure user is logged in (typically subscriptions require a user account)
     if ( ! is_user_logged_in() ) {
-        wp_send_json_error( array( 'message' => __( 'You must be logged in to subscribe.', 'custom-login-subscription' ) ) );
+        wp_send_json_error( array( 'message' => esc_html__( 'You must be logged in to subscribe.', 'custom-login-subscription' ) ) );
         return;
     }
 
@@ -62,8 +62,7 @@ function cls_create_stripe_checkout_session_ajax_handler() {
         'mode'                 => 'subscription',
         'success_url'          => $success_url,
         'cancel_url'           => $cancel_url,
-        // 'client_reference_id'  => $current_user->ID . '_' . $package_id, // Useful for webhooks
-        'metadata'             => [ // Add metadata to the Stripe Checkout Session
+        'metadata'             => [
             'wp_user_id' => $current_user->ID,
             'wp_package_id' => $package_id,
         ]
@@ -72,26 +71,8 @@ function cls_create_stripe_checkout_session_ajax_handler() {
     if ($stripe_customer_id) {
         $checkout_session_params['customer'] = $stripe_customer_id;
     } else {
-        // If no Stripe customer ID, prefill email and create customer later via webhook or success handler
         $checkout_session_params['customer_email'] = $current_user->user_email;
-        // Or create customer now:
-        // try {
-        //     $customer = \Stripe\Customer::create([
-        //         'email' => $current_user->user_email,
-        //         'name' => $current_user->display_name,
-        //         'metadata' => [
-        //             'wp_user_id' => $current_user->ID,
-        //         ]
-        //     ]);
-        //     $stripe_customer_id = $customer->id;
-        //     update_user_meta($current_user->ID, '_stripe_customer_id', $stripe_customer_id);
-        //     $checkout_session_params['customer'] = $stripe_customer_id;
-        // } catch (\Stripe\Exception\ApiErrorException $e) {
-        //     wp_send_json_error( array( 'message' => 'Error creating Stripe customer: ' . $e->getMessage() ) );
-        //     return;
-        // }
     }
-
 
     try {
         $checkout_session = \Stripe\Checkout\Session::create( $checkout_session_params );
@@ -104,7 +85,6 @@ function cls_create_stripe_checkout_session_ajax_handler() {
         wp_send_json_error( array( 'message' => 'Error creating Stripe session: ' . $e->getMessage() ) );
     }
 }
-// Hook for logged-in users. If you want to allow non-logged-in users, also add 'wp_ajax_nopriv_cls_create_stripe_checkout_session'.
 add_action( 'wp_ajax_cls_create_stripe_checkout_session', 'cls_create_stripe_checkout_session_ajax_handler' );
 
 
@@ -115,16 +95,13 @@ function cls_register_stripe_webhook_endpoint() {
     register_rest_route( 'custom-login-subscription/v1', '/stripe-webhook', array(
         'methods'  => 'POST',
         'callback' => 'cls_handle_stripe_webhook',
-        'permission_callback' => '__return_true', // Open endpoint, security is handled by Stripe signature
+        'permission_callback' => '__return_true',
     ) );
 }
 add_action( 'rest_api_init', 'cls_register_stripe_webhook_endpoint' );
 
 /**
  * Helper function to get a WordPress user by Stripe Subscription ID.
- *
- * @param string $stripe_subscription_id The Stripe Subscription ID.
- * @return WP_User|false The user object if found, false otherwise.
  */
 function cls_get_user_by_stripe_subscription_id( $stripe_subscription_id ) {
     if ( empty( $stripe_subscription_id ) ) {
@@ -141,17 +118,13 @@ function cls_get_user_by_stripe_subscription_id( $stripe_subscription_id ) {
 
 /**
  * Helper function to get a WordPress user by Stripe Customer ID.
- * (Useful for events that are customer-centric rather than subscription-centric)
- *
- * @param string $stripe_customer_id The Stripe Customer ID.
- * @return WP_User|false The user object if found, false otherwise.
  */
 function cls_get_user_by_stripe_customer_id( $stripe_customer_id ) {
     if ( empty( $stripe_customer_id ) ) {
         return false;
     }
     $users = get_users( array(
-        'meta_key'   => '_cls_stripe_customer_id', // Primary meta key for customer ID
+        'meta_key'   => '_cls_stripe_customer_id',
         'meta_value' => $stripe_customer_id,
         'number'     => 1,
         'count_total' => false,
@@ -159,7 +132,6 @@ function cls_get_user_by_stripe_customer_id( $stripe_customer_id ) {
     if ( ! empty( $users ) ) {
         return $users[0];
     }
-    // Fallback to the general _stripe_customer_id if used by other processes
     $users = get_users( array(
         'meta_key'   => '_stripe_customer_id',
         'meta_value' => $stripe_customer_id,
@@ -172,26 +144,21 @@ function cls_get_user_by_stripe_customer_id( $stripe_customer_id ) {
 
 /**
  * Handles incoming Stripe webhooks.
- *
- * @param WP_REST_Request $request The REST API request object.
- * @return WP_REST_Response
  */
 function cls_handle_stripe_webhook( WP_REST_Request $request ) {
     $payload = $request->get_body();
-    $sig_header = $request->get_header( 'stripe_signature' ); // Stripe sends 'Stripe-Signature'
+    $sig_header = $request->get_header( 'stripe_signature' );
 
     $stripe_secret_key = cls_get_setting('stripe_secret_key');
     $stripe_webhook_secret = cls_get_setting('stripe_webhook_secret');
 
-    // Check if Stripe keys are set
     if ( empty($stripe_secret_key) || empty($stripe_webhook_secret) ) {
         error_log('Stripe Webhook Error: Stripe Secret Key or Webhook Secret not configured in settings.');
-        return new WP_REST_Response( array( 'error' => 'Stripe webhook processing not configured on server.' ), 500 );
+        return new WP_REST_Response( array( 'error' => esc_html__('Stripe webhook processing not configured on server.', 'custom-login-subscription') ), 500 );
     }
-     // Check if Stripe PHP SDK is loaded
     if ( !class_exists('\Stripe\Stripe') ) {
         error_log('Stripe Webhook Error: Stripe PHP library not found.');
-        return new WP_REST_Response( array( 'error' => 'Stripe PHP library not found on server.' ), 500 );
+        return new WP_REST_Response( array( 'error' => esc_html__('Stripe PHP library not found on server.', 'custom-login-subscription') ), 500 );
     }
 
     \Stripe\Stripe::setApiKey( $stripe_secret_key );
@@ -202,19 +169,18 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
         );
     } catch ( \UnexpectedValueException $e ) {
         error_log( 'Stripe Webhook Error: Invalid payload. ' . $e->getMessage() );
-        return new WP_REST_Response( array( 'error' => 'Invalid payload' ), 400 );
+        return new WP_REST_Response( array( 'error' => esc_html__('Invalid payload', 'custom-login-subscription') ), 400 );
     } catch ( \Stripe\Exception\SignatureVerificationException $e ) {
         error_log( 'Stripe Webhook Error: Invalid signature. ' . $e->getMessage() );
-        return new WP_REST_Response( array( 'error' => 'Invalid signature' ), 400 );
+        return new WP_REST_Response( array( 'error' => esc_html__('Invalid signature', 'custom-login-subscription') ), 400 );
     } catch ( Exception $e ) {
         error_log( 'Stripe Webhook Error: Generic error during event construction. ' . $e->getMessage() );
-        return new WP_REST_Response( array( 'error' => 'Webhook error: ' . $e->getMessage() ), 400 );
+        return new WP_REST_Response( array( 'error' => sprintf(esc_html__('Webhook error: %s', 'custom-login-subscription'), esc_html($e->getMessage())) ), 400 );
     }
 
-    // Handle the event
     switch ( $event->type ) {
         case 'checkout.session.completed':
-            $session = $event->data->object; // contains a \Stripe\Checkout\Session
+            $session = $event->data->object;
 
             $wp_user_id = isset($session->metadata->wp_user_id) ? intval($session->metadata->wp_user_id) : null;
             $wp_package_id = isset($session->metadata->wp_package_id) ? intval($session->metadata->wp_package_id) : null;
@@ -227,7 +193,8 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
 
                 if ( !$user || ($package && $package->post_type !== 'subscription_package') ) {
                     error_log("Stripe Webhook (checkout.session.completed): User or Package not found. User ID: {$wp_user_id}, Package ID: {$wp_package_id}");
-                    break; // Break switch, will return 200
+                // Potentially send an admin email here if critical.
+                    break;
                 }
 
                 try {
@@ -236,7 +203,7 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
                     $start_date = $stripe_subscription->start_date;
 
                     update_user_meta( $wp_user_id, '_cls_subscription_package_id', $wp_package_id );
-                    update_user_meta( $wp_user_id, '_cls_subscription_status', 'active' ); // Stripe status is $stripe_subscription->status
+                    update_user_meta( $wp_user_id, '_cls_subscription_status', 'active' );
                     update_user_meta( $wp_user_id, '_cls_stripe_customer_id', $stripe_customer_id );
                     update_user_meta( $wp_user_id, '_cls_stripe_subscription_id', $stripe_subscription_id );
                     update_user_meta( $wp_user_id, '_cls_subscription_start_date', $start_date );
@@ -247,7 +214,6 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
                          update_user_meta( $wp_user_id, '_stripe_customer_id', $stripe_customer_id );
                     }
 
-                    // Send email notification
                     $user_info = get_userdata($wp_user_id);
                     if ($user_info) {
                         $context_data = [
@@ -279,20 +245,16 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
                 if ( $user ) {
                     try {
                         $stripe_subscription = \Stripe\Subscription::retrieve($stripe_subscription_id);
-                        update_user_meta( $user->ID, '_cls_subscription_status', 'active' ); // Stripe status: $stripe_subscription->status
+                        update_user_meta( $user->ID, '_cls_subscription_status', 'active' );
                         update_user_meta( $user->ID, '_cls_subscription_end_date', $stripe_subscription->current_period_end );
-                        // If it's the first invoice of a trial, start_date might need to be set if not done by checkout.session.completed
                         if ( $invoice->billing_reason === 'subscription_cycle' || $invoice->billing_reason === 'subscription_create') {
-                            // Send renewal email
                             $context_data = [
                                 'user_id'         => $user->ID,
                                 'package_id'      => get_user_meta($user->ID, '_cls_subscription_package_id', true),
                                 'subscription_id' => $stripe_subscription_id,
                                 'end_date'        => $stripe_subscription->current_period_end,
                             ];
-                            // Note: 'subscription_renewed' email type is not yet in settings, this will likely use 'successful_subscription' or need a new template.
-                            // For now, let's assume a generic 'successful_payment' or reuse 'successful_subscription' if appropriate.
-                            // cls_send_notification_email($user->user_email, 'subscription_renewed', $context_data); // Or a more generic success email
+                            // cls_send_notification_email($user->user_email, 'subscription_renewed', $context_data);
 
                             do_action('cls_subscription_renewed', $user->ID, $stripe_subscription_id);
                             error_log("Stripe Webhook: Processed invoice.payment_succeeded for User ID {$user->ID}, Sub ID {$stripe_subscription_id}");
@@ -312,14 +274,12 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
             if ($stripe_subscription_id) {
                 $user = cls_get_user_by_stripe_subscription_id( $stripe_subscription_id );
                 if ( $user ) {
-                    update_user_meta( $user->ID, '_cls_subscription_status', 'past_due' ); // Or 'payment_failed'
+                    update_user_meta( $user->ID, '_cls_subscription_status', 'past_due' );
 
-                    // Send payment failed email
                     $context_data = [
                         'user_id'         => $user->ID,
                         'package_id'      => get_user_meta($user->ID, '_cls_subscription_package_id', true),
                         'subscription_id' => $stripe_subscription_id,
-                         // 'amount_due' => $invoice->amount_due, // if needed
                     ];
                     cls_send_notification_email($user->user_email, 'payment_failed', $context_data);
 
@@ -332,15 +292,11 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
             break;
 
         case 'customer.subscription.updated':
-            $stripe_subscription = $event->data->object; // This is a Stripe Subscription object
+            $stripe_subscription = $event->data->object;
             $user = cls_get_user_by_stripe_subscription_id( $stripe_subscription->id );
             if ( $user ) {
-                update_user_meta( $user->ID, '_cls_subscription_status', $stripe_subscription->status ); // e.g. active, past_due, trialing
+                update_user_meta( $user->ID, '_cls_subscription_status', $stripe_subscription->status );
                 update_user_meta( $user->ID, '_cls_subscription_end_date', $stripe_subscription->current_period_end );
-                // If plan changed: $stripe_subscription->items->data[0]->price->id can give new price_id
-                // This would require mapping Stripe Price ID back to your WP Package ID, which can be complex.
-                // For now, we assume package_id does not change or is handled manually.
-                // update_user_meta( $user->ID, '_cls_stripe_price_id', $stripe_subscription->items->data[0]->price->id );
                 do_action('cls_subscription_updated', $user->ID, $stripe_subscription->id);
                 error_log("Stripe Webhook: Processed customer.subscription.updated for User ID {$user->ID}, Sub ID {$stripe_subscription->id}. New status: {$stripe_subscription->status}");
             } else {
@@ -348,25 +304,19 @@ function cls_handle_stripe_webhook( WP_REST_Request $request ) {
             }
             break;
 
-        case 'customer.subscription.deleted': // Occurs when a subscription is canceled
+        case 'customer.subscription.deleted':
             $stripe_subscription = $event->data->object;
             $user = cls_get_user_by_stripe_subscription_id( $stripe_subscription->id );
             if ( $user ) {
                 update_user_meta( $user->ID, '_cls_subscription_status', 'canceled' );
                 if ( isset($stripe_subscription->ended_at) && !empty($stripe_subscription->ended_at) ) {
                      update_user_meta( $user->ID, '_cls_subscription_end_date', $stripe_subscription->ended_at );
-                } else {
-                    // If ended_at is not set, it might be canceled but active until period end.
-                    // current_period_end is likely more relevant until true deletion/expiration.
-                    // Or use canceled_at if immediate. For simplicity, we mark as 'canceled'.
-                    // The status 'canceled' should gate access.
                 }
-                // Send cancellation email
                 $context_data = [
                     'user_id'         => $user->ID,
                     'package_id'      => get_user_meta($user->ID, '_cls_subscription_package_id', true),
                     'subscription_id' => $stripe_subscription->id,
-                    'end_date'        => get_user_meta($user->ID, '_cls_subscription_end_date', true), // Use the updated end_date
+                    'end_date'        => get_user_meta($user->ID, '_cls_subscription_end_date', true),
                 ];
                 cls_send_notification_email($user->user_email, 'subscription_canceled', $context_data);
 

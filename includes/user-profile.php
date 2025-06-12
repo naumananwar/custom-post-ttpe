@@ -38,52 +38,54 @@ function cls_display_subscription_details_on_profile( $user ) {
     }
 
     // Get package name
-    $package_name = ! empty( $package_id ) ? get_the_title( $package_id ) : __( 'N/A', 'custom-login-subscription' );
+    $package_name = ! empty( $package_id ) ? get_the_title( $package_id ) : esc_html__( 'N/A', 'custom-login-subscription' );
     if ( empty($package_name) && !empty($package_id) ) { // If get_the_title returns empty (e.g. post deleted)
-        $package_name = __( 'Unknown Package (ID: ', 'custom-login-subscription' ) . $package_id . ')';
+        $package_name = sprintf(esc_html__( 'Unknown Package (ID: %s)', 'custom-login-subscription' ), esc_html($package_id));
     }
 
 
     // Format dates
-    $date_format = get_option( 'date_format' );
-    $start_date_formatted = ! empty( $start_date_ts ) ? date_i18n( $date_format, $start_date_ts ) : __( 'N/A', 'custom-login-subscription' );
-    $end_date_formatted = ! empty( $end_date_ts ) ? date_i18n( $date_format, $end_date_ts ) : __( 'N/A', 'custom-login-subscription' );
+    $date_format = get_option( 'date_format', 'F j, Y' ); // Provide a fallback date_format
+    $start_date_formatted = ! empty( $start_date_ts ) ? date_i18n( $date_format, (int) $start_date_ts ) : esc_html__( 'N/A', 'custom-login-subscription' );
+    $end_date_formatted = ! empty( $end_date_ts ) ? date_i18n( $date_format, (int) $end_date_ts ) : esc_html__( 'N/A', 'custom-login-subscription' );
 
-    $gateway_display = !empty($gateway) ? ucfirst($gateway) : __('N/A', 'custom-login-subscription');
+    $gateway_display = !empty($gateway) ? ucfirst($gateway) : esc_html__('N/A', 'custom-login-subscription');
+    $status_display = !empty($status) ? ucfirst($status) : esc_html__('N/A', 'custom-login-subscription');
+
 
     ?>
-    <h3><?php _e( 'My Subscription Details', 'custom-login-subscription' ); ?></h3>
+    <h3><?php esc_html_e( 'My Subscription Details', 'custom-login-subscription' ); ?></h3>
     <table class="form-table" id="cls-subscription-details">
         <tbody>
             <tr>
-                <th><label for="cls_package_name"><?php _e( 'Package', 'custom-login-subscription' ); ?></label></th>
-                <td id="cls_package_name"><?php echo esc_html( $package_name ); ?></td>
+                <th><label><?php esc_html_e( 'Package', 'custom-login-subscription' ); ?></label></th>
+                <td><?php echo esc_html( $package_name ); ?></td>
             </tr>
             <tr>
-                <th><label for="cls_subscription_status"><?php _e( 'Status', 'custom-login-subscription' ); ?></label></th>
-                <td id="cls_subscription_status"><?php echo esc_html( ucfirst( $status ) ); ?></td>
+                <th><label><?php esc_html_e( 'Status', 'custom-login-subscription' ); ?></label></th>
+                <td><?php echo esc_html( $status_display ); ?></td>
             </tr>
             <tr>
-                <th><label for="cls_payment_gateway"><?php _e( 'Payment Gateway', 'custom-login-subscription' ); ?></label></th>
-                <td id="cls_payment_gateway"><?php echo esc_html( $gateway_display ); ?></td>
+                <th><label><?php esc_html_e( 'Payment Gateway', 'custom-login-subscription' ); ?></label></th>
+                <td><?php echo esc_html( $gateway_display ); ?></td>
             </tr>
             <tr>
-                <th><label for="cls_start_date"><?php _e( 'Start Date', 'custom-login-subscription' ); ?></label></th>
-                <td id="cls_start_date"><?php echo esc_html( $start_date_formatted ); ?></td>
+                <th><label><?php esc_html_e( 'Start Date', 'custom-login-subscription' ); ?></label></th>
+                <td><?php echo esc_html( $start_date_formatted ); ?></td>
             </tr>
             <tr>
                 <th>
-                    <label for="cls_end_date">
+                    <label>
                         <?php
-                        if ($status === 'active' || $status === 'past_due' || $status === 'trialing') {
-                            _e( 'Renews On', 'custom-login-subscription' );
+                        if ($status === 'active' || $status === 'past_due' || $status === 'trialing') { // Use strict comparison if status values are well-defined
+                            esc_html_e( 'Renews On', 'custom-login-subscription' );
                         } else {
-                            _e( 'Expires/Expired On', 'custom-login-subscription' );
+                            esc_html_e( 'Expires/Expired On', 'custom-login-subscription' );
                         }
                         ?>
                     </label>
                 </th>
-                <td id="cls_end_date"><?php echo esc_html( $end_date_formatted ); ?></td>
+                <td><?php echo esc_html( $end_date_formatted ); ?></td>
             </tr>
         </tbody>
     </table>
