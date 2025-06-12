@@ -1,0 +1,89 @@
+/**
+ * Basic frontend styling for Custom Login & Subscription Plugin
+ */
+
+.cls-subscription-packages-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.cls-package {
+    border: 1px solid #ddd;
+    padding: 20px;
+    border-radius: 8px;
+    background-color: #f9f9f9;
+    flex: 1 1 300px; /* Flex properties for a responsive grid-like layout */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+}
+
+.cls-package h3 {
+    margin-top: 0;
+    color: #333;
+    font-size: 1.5em;
+}
+
+.cls-package-description {
+    margin-bottom: 15px;
+    color: #555;
+    flex-grow: 1; /* Allows description to take available space */
+}
+
+.cls-package-price {
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #0073aa; /* WordPress blue */
+    margin-bottom: 15px;
+}
+
+.cls-package-features {
+    margin-bottom: 20px;
+}
+
+.cls-package-features h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 1.1em;
+    color: #444;
+}
+
+.cls-package-features ul {
+    list-style: disc;
+    margin-left: 20px;
+    padding-left: 0;
+    color: #666;
+}
+
+.cls-package-features ul li {
+    margin-bottom: 5px;
+}
+
+.cls-subscribe-button {
+    background-color: #0085ba; /* Another WordPress blue */
+    color: #fff;
+    border: none;
+    padding: 10px 15px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 1em;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    align-self: flex-start; /* Align button to the start of the flex item (bottom left) */
+}
+
+.cls-subscribe-button:hover {
+    background-color: #005a80;
+}
+
+/* Clearfix for any floated content if needed, though flex is used here */
+.cls-subscription-packages-wrapper::after {
+    content: "";
+    clear: both;
+    display: table;
+}
