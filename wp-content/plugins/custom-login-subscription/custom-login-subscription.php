@@ -180,4 +180,156 @@ require_once CLS_PLUGIN_DIR . 'includes/email-handler.php';
 // }
 // run_custom_login_subscription();
 
+// Could be in custom-login-subscription.php or includes/setup.php
+if ( ! function_exists( 'cls_create_placeholder_pages' ) ) {
+    function cls_create_placeholder_pages() {
+        $pages_to_create = array(
+            'package-subscription' => array(
+                'title' => 'Package Subscription',
+                'content' => '<!-- wp:shortcode -->[cls_subscription_packages_list /]<!-- /wp:shortcode --> <p>Please subscribe to a package to continue.</p>',
+                'option_name' => 'cls_package_subscription_page_id' // Option to store the page ID
+            ),
+            'student-dashboard' => array(
+                'title' => 'Student Dashboard',
+                'content' => '<!-- wp:shortcode -->[cls_student_dashboard /]<!-- /wp:shortcode --> <p>Welcome to your dashboard!</p>',
+                'option_name' => 'cls_student_dashboard_page_id'
+            ),
+            'instructor-dashboard' => array(
+                'title' => 'Instructor Dashboard',
+                'content' => '<!-- wp:shortcode -->[cls_instructor_dashboard /]<!-- /wp:shortcode --> <p>Welcome to your dashboard!</p>',
+                'option_name' => 'cls_instructor_dashboard_page_id'
+            ),
+            'institution-dashboard' => array(
+                'title' => 'Institution Dashboard',
+                'content' => '<!-- wp:shortcode -->[cls_institution_dashboard /]<!-- /wp:shortcode --> <p>Welcome to your dashboard!</p>',
+                'option_name' => 'cls_institution_dashboard_page_id'
+            )
+        );
+
+        foreach ( $pages_to_create as $slug => $page_data ) {
+            $page_id = get_option( $page_data['option_name'] );
+
+            // Check if page exists and is valid
+            if ( $page_id && get_post_status( $page_id ) === 'publish' && get_post_type( $page_id ) === 'page' ) {
+                // Optional: Check if slug matches, though ID is primary reference
+                // $existing_page = get_post($page_id);
+                // if ($existing_page && $existing_page->post_name === $slug) {
+                //    continue; // Page exists and slug matches
+                // }
+                continue; // Page exists
+            }
+
+            // Check if a page with this slug already exists (e.g. user created it manually)
+            $existing_page_by_slug = get_page_by_path( $slug, OBJECT, 'page' );
+            if ( $existing_page_by_slug ) {
+                update_option( $page_data['option_name'], $existing_page_by_slug->ID );
+                // Optionally, update its content if it's empty or different
+                // if (empty($existing_page_by_slug->post_content)) {
+                //    wp_update_post(['ID' => $existing_page_by_slug->ID, 'post_content' => $page_data['content']]);
+                // }
+                continue;
+            }
+
+            // Create the page
+            $page_args = array(
+                'post_title'    => $page_data['title'],
+                'post_content'  => $page_data['content'],
+                'post_status'   => 'publish',
+                'post_type'     => 'page',
+                'post_name'     => $slug, // Set the slug
+                'comment_status' => 'closed',
+                'ping_status'   => 'closed',
+            );
+            $new_page_id = wp_insert_post( $page_args );
+
+            if ( $new_page_id && ! is_wp_error( $new_page_id ) ) {
+                update_option( $page_data['option_name'], $new_page_id );
+            }
+        }
+    }
+}
+
+// Add this function in custom-login-subscription.php, outside any class
+if ( ! function_exists( 'cls_handle_social_login_redirect' ) ) {
+    function cls_handle_social_login_redirect( $user_id ) {
+        // Placeholder for subscription check - this will be refined in later phases
+        // For now, assume no subscription by default.
+        // A real check might involve looking up a custom table or user meta set by payment gateways.
+        $has_active_subscription = get_user_meta( $user_id, '_cls_has_active_subscription', true ); // Example meta key
+
+        if ( ! $has_active_subscription ) {
+            $subscription_page_id = get_option('cls_package_subscription_page_id');
+            if ($subscription_page_id) {
+                return get_permalink($subscription_page_id);
+            } else {
+                // Fallback if page ID not found in options (should not happen if created on activation)
+                return home_url( '/package-subscription/' );
+            }
+        }
+
+        $user = get_userdata( $user_id );
+        if ( ! $user ) {
+            return home_url(); // Fallback if user not found
+        }
+
+        $redirect_url = home_url(); // Default redirect
+
+        if ( in_array( 'student', (array) $user->roles ) ) {
+            $dashboard_page_id = get_option('cls_student_dashboard_page_id');
+            if ($dashboard_page_id) {
+                $redirect_url = get_permalink($dashboard_page_id);
+            } else {
+                $redirect_url = home_url( '/student-dashboard/' ); // Fallback
+            }
+        } elseif ( in_array( 'instructor', (array) $user->roles ) ) {
+            $dashboard_page_id = get_option('cls_instructor_dashboard_page_id');
+            if ($dashboard_page_id) {
+                $redirect_url = get_permalink($dashboard_page_id);
+            } else {
+                $redirect_url = home_url( '/instructor-dashboard/' ); // Fallback
+            }
+        } elseif ( in_array( 'institution', (array) $user->roles ) ) {
+            $dashboard_page_id = get_option('cls_institution_dashboard_page_id');
+            if ($dashboard_page_id) {
+                $redirect_url = get_permalink($dashboard_page_id);
+            } else {
+                $redirect_url = home_url( '/institution-dashboard/' ); // Fallback
+            }
+        }
+        // Else, if none of these roles, or multiple roles without a specific primary one,
+        // it will redirect to home_url() or you can define other logic.
+
+        return $redirect_url;
+    }
+}
+
+// Hook into standard WordPress login
+add_filter( 'login_redirect', 'cls_apply_custom_login_redirect', 10, 3 );
+
+if ( ! function_exists( 'cls_apply_custom_login_redirect' ) ) {
+    function cls_apply_custom_login_redirect( $redirect_to, $requested_redirect_to, $user ) {
+        // Ensure $user is a WP_User object and not an error
+        if ( is_wp_error( $user ) || ! is_object( $user ) || ! isset( $user->ID ) ) {
+            return $redirect_to; // Return default redirect for errors or non-user objects
+        }
+
+        // Simplified admin logic from subtask description
+        if ( user_can( $user, 'manage_options' ) ) {
+            // If admin is trying to go to a specific page (e.g. via ?redirect_to= query)
+            if ( !empty($requested_redirect_to) && $requested_redirect_to !== home_url('/') && $requested_redirect_to !== admin_url() ) {
+                 // Potentially check if this requested_redirect_to is one of our dashboards, if admin also has that role.
+                 // For now, let it pass through or decide if admins should *always* go to admin_url unless it's a frontend dash.
+                 // This part is complex. Simplest for now: if admin, and redirect_to is not obviously frontend, let WP handle it or go to admin.
+            }
+            // If $redirect_to is already pointing to wp-admin, or if $requested_redirect_to is empty,
+            // let them proceed to wp-admin. The default $redirect_to for admins is usually wp-admin/profile.php or wp-admin/.
+            return $redirect_to;
+        }
+
+        // For non-admins, proceed with custom redirection logic
+        // Get the redirect URL from the refactored function
+        $custom_redirect_url = cls_handle_social_login_redirect( $user->ID );
+        return $custom_redirect_url; // Return the URL for login_redirect filter
+    }
+}
 ?>

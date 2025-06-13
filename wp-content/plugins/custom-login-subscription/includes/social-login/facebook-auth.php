@@ -178,6 +178,9 @@ class CLS_Facebook_Auth {
             wp_set_auth_cookie( $user->ID );
             update_user_meta( $user->ID, 'facebook_user_id', $facebook_user_id );
             // Potentially update other details
+            $redirect_url = cls_handle_social_login_redirect( $user->ID ); // Redirect for existing user
+            wp_redirect( $redirect_url );
+            exit;
         } else {
             // User does not exist, create a new user
             $username = $this->generate_username_from_email( $email, $first_name, $last_name );
@@ -201,11 +204,15 @@ class CLS_Facebook_Auth {
 
             wp_set_current_user( $user_id, $username );
             wp_set_auth_cookie( $user_id );
-            // wp_new_user_notification( $user_id, null, 'both' );
+            wp_new_user_notification( $user_id, null, 'both' );
+            $redirect_url = cls_handle_social_login_redirect( $user_id ); // Redirect for new user
+            wp_redirect( $redirect_url );
+            exit;
         }
 
-        wp_redirect( home_url() );
-        exit;
+        // This part should ideally not be reached if the logic above is correct.
+        // wp_redirect( home_url() );
+        // exit;
     }
 
     /**

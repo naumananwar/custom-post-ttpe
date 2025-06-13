@@ -4,6 +4,20 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+require_once CLS_PLUGIN_DIR . 'includes/lib/php-jwt/JWT.php';
+require_once CLS_PLUGIN_DIR . 'includes/lib/php-jwt/Key.php';
+require_once CLS_PLUGIN_DIR . 'includes/lib/php-jwt/JWK.php'; // Added JWK
+require_once CLS_PLUGIN_DIR . 'includes/lib/php-jwt/ExpiredException.php';
+require_once CLS_PLUGIN_DIR . 'includes/lib/php-jwt/SignatureInvalidException.php';
+require_once CLS_PLUGIN_DIR . 'includes/lib/php-jwt/BeforeValidException.php';
+
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+use Firebase\JWT\JWK; // Added JWK
+use Firebase\JWT\ExpiredException;
+use Firebase\JWT\SignatureInvalidException;
+use Firebase\JWT\BeforeValidException;
+
 /**
  * Handles the Sign in with Apple process.
  */
@@ -91,14 +105,14 @@ class CLS_Apple_Auth {
 
         // It's good practice to verify the 'state' if you passed one to Apple.
         // The JS sets a state, Apple includes it in the POST.
-        // if ( ! session_id() ) {
-        //     session_start();
-        // }
-        // if ( !isset($_POST['state']) || !isset($_SESSION['apple_auth_state']) || $_POST['state'] !== $_SESSION['apple_auth_state'] ) {
-        //     error_log('Apple Auth Error: Invalid state parameter. CSRF might be attempted.');
-        //     wp_die( esc_html__('Invalid state. CSRF protection mismatch.', 'custom-login-subscription') );
-        // }
-        // unset($_SESSION['apple_auth_state']); // Clean up
+        if (session_status() == PHP_SESSION_NONE) {
+            session_start();
+        }
+        if ( !isset($_POST['state']) || !isset($_SESSION['apple_auth_state']) || $_POST['state'] !== $_SESSION['apple_auth_state'] ) {
+            error_log('Apple Auth Error: Invalid state parameter. CSRF might be attempted.');
+            wp_die( esc_html__('Invalid state. CSRF protection mismatch.', 'custom-login-subscription') );
+        }
+        unset($_SESSION['apple_auth_state']); // Clean up
 
         $id_token = sanitize_text_field( $_POST['id_token'] );
         // $auth_code = isset( $_POST['code'] ) ? sanitize_text_field( $_POST['code'] ) : null; // Authorization code
@@ -114,30 +128,13 @@ class CLS_Apple_Auth {
         $decoded_token = $this->decode_apple_jwt( $id_token );
 
         if ( ! $decoded_token || ! isset( $decoded_token->sub ) ) {
-            error_log('Apple Auth Error: Invalid or undecodable ID token. Raw token: ' . $id_token);
-            wp_die( esc_html__('Authentication with Apple failed. Could not validate token.', 'custom-login-subscription') );
+            error_log('Apple Auth Error: Full JWT validation failed or token did not contain subject (sub). Review previous logs for details. Raw token hint: ' . substr($id_token, 0, 20) . '...');
+            wp_die( esc_html__('Authentication with Apple failed. Could not validate your identity token.', 'custom-login-subscription') );
             return;
         }
 
-        $apple_client_id = cls_get_setting('apple_service_id');
-        if(empty($apple_client_id)) {
-            error_log('Apple Auth Error: Apple Service ID (Client ID) is not configured in settings.');
-            wp_die( esc_html__('Apple authentication is not properly configured (missing Client ID).', 'custom-login-subscription') );
-            return;
-        }
-
-        // Verify 'iss' and 'aud' claims (simplified)
-        if ( $decoded_token->iss !== 'https://appleid.apple.com' || $decoded_token->aud !== $apple_client_id ) {
-            error_log('Apple Auth Error: Token issuer or audience mismatch. Decoded: ' . print_r($decoded_token, true) . ' Expected AUD: ' . $apple_client_id);
-            wp_die( esc_html__('Apple token validation failed (issuer/audience).', 'custom-login-subscription') );
-            return;
-        }
-        // Check 'exp' claim
-        if ( time() > $decoded_token->exp ) {
-            error_log('Apple Auth Error: Token expired. Decoded: ' . print_r($decoded_token, true));
-            wp_die( esc_html__('Apple token has expired.', 'custom-login-subscription') );
-            return;
-        }
+        // $apple_client_id setting is now checked within decode_apple_jwt
+        // Redundant claim checks are also removed as they are handled by decode_apple_jwt
 
         $apple_user_id = $decoded_token->sub;
         $email = isset( $decoded_token->email ) ? sanitize_email( $decoded_token->email ) : null;
@@ -186,6 +183,9 @@ class CLS_Apple_Auth {
                 if (!empty($last_name)) $update_args['last_name'] = $last_name;
                 wp_update_user($update_args);
             }
+            $redirect_url = cls_handle_social_login_redirect( $user->ID ); // Redirect for existing user
+            wp_redirect( $redirect_url );
+            exit;
         } else {
             // User does not exist, create a new user
             $username = $this->generate_username_from_email( $email, $first_name, $last_name );
@@ -213,28 +213,120 @@ class CLS_Apple_Auth {
 
             wp_set_current_user( $user_id, $username );
             wp_set_auth_cookie( $user_id );
-            // wp_new_user_notification( $user_id, null, 'both' );
+            wp_new_user_notification( $user_id, null, 'both' );
+            $redirect_url = cls_handle_social_login_redirect( $user_id ); // Redirect for new user
+            wp_redirect( $redirect_url );
+            exit;
         }
 
-        wp_redirect( home_url() );
-        exit;
+        // This part should ideally not be reached if the logic above is correct.
+        // wp_redirect( home_url() );
+        // exit;
     }
 
-    /**
-     * Basic decoding of JWT.
-     * THIS IS NOT SECURE FOR PRODUCTION WITHOUT SIGNATURE VERIFICATION.
-     * Replace with a proper JWT library and validation.
-     */
-    private function decode_apple_jwt( $jwt_string ) {
-        $parts = explode('.', $jwt_string);
-        if (count($parts) !== 3) {
-            return null; // Invalid JWT structure
+    private function get_apple_public_keys() {
+        $cache_key = 'cls_apple_public_keys_v2'; // New cache key
+        $cached_data = get_transient( $cache_key );
+        if ( $cached_data ) {
+            return $cached_data; // This will be an array like ['keys' => [...]]
         }
-        // $header = json_decode(base64_decode(str_replace(['-', '_'], ['+', '/'], $parts[0])));
-        $payload = json_decode(base64_decode(str_replace(['-', '_'], ['+', '/'], $parts[1])));
-        // $signature = $parts[2]; // Signature not verified here
 
-        return $payload; // Return only payload
+        $response = wp_remote_get( 'https://appleid.apple.com/auth/keys' );
+        if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
+            error_log( 'Apple Auth: Failed to fetch public keys from Apple. ' . (is_wp_error($response) ? $response->get_error_message() : 'HTTP Status: ' . wp_remote_retrieve_response_code($response)) );
+            return null;
+        }
+
+        $body = wp_remote_retrieve_body( $response );
+        $data = json_decode( $body, true ); // $data should be like ['keys' => [ 0 => ['kty' => ..., 'kid' => ...], ... ]]
+
+        if ( ! isset( $data['keys'] ) || ! is_array( $data['keys'] ) ) {
+            error_log( 'Apple Auth: Invalid format for public keys from Apple. Response: ' . $body );
+            return null;
+        }
+
+        set_transient( $cache_key, $data, DAY_IN_SECONDS ); // Cache the entire object containing the 'keys' array for 1 day
+        return $data;
+    }
+
+    private function decode_apple_jwt( $id_token ) {
+        $apple_client_id = cls_get_setting('apple_service_id');
+        if (empty($apple_client_id)) {
+            error_log('Apple Auth Error: Apple Service ID (Client ID) is not configured for JWT validation.');
+            return null;
+        }
+
+        $jwks_data = $this->get_apple_public_keys(); // Fetches e.g. ['keys' => [0 => ['kty'...], 1 => ['kty'...]]]
+        if ( ! $jwks_data || ! isset( $jwks_data['keys'] ) || empty( $jwks_data['keys'] ) ) {
+            error_log('Apple Auth: Failed to get Apple public keys or keys array is empty for JWT validation.');
+            return null;
+        }
+
+        try {
+            // firebase/php-jwt v6+ uses JWK::parseKeySet to prepare the keys.
+            // This function expects an array of JWK data (like the 'keys' array from Apple's response).
+            $parsed_jwks = JWK::parseKeySet( $jwks_data['keys'], 'RS256' ); // Specify allowed algorithm for safety
+
+            JWT::$leeway = 60; // Allow up to 60 seconds of clock skew for exp, nbf, iat claims.
+
+            // JWT::decode will use the 'kid' from the token header to select the correct key from $parsed_jwks.
+            $decoded_token = JWT::decode( $id_token, $parsed_jwks );
+
+            // Validate standard claims
+            if ( !isset($decoded_token->iss) || $decoded_token->iss !== 'https://appleid.apple.com' ) {
+                error_log( 'Apple Auth Error: Token issuer (iss) mismatch. Expected: https://appleid.apple.com, Got: ' . ($decoded_token->iss ?? 'null') );
+                return null;
+            }
+
+            // Apple can return 'aud' as a string or an array of strings.
+            $audience_is_valid = false;
+            if (isset($decoded_token->aud)) {
+                if (is_array($decoded_token->aud)) {
+                    if (in_array($apple_client_id, $decoded_token->aud)) {
+                        $audience_is_valid = true;
+                    }
+                } elseif (is_string($decoded_token->aud)) {
+                    if ($decoded_token->aud === $apple_client_id) {
+                        $audience_is_valid = true;
+                    }
+                }
+            }
+
+            if (!$audience_is_valid) {
+                $received_aud = 'null';
+                if(isset($decoded_token->aud)) {
+                    $received_aud = is_array($decoded_token->aud) ? implode(', ', $decoded_token->aud) : $decoded_token->aud;
+                }
+                error_log( 'Apple Auth Error: Token audience (aud) mismatch or missing. Expected: ' . $apple_client_id . ', Got: ' . $received_aud );
+                return null;
+            }
+
+            // 'exp' (expiration) is automatically checked by JWT::decode().
+            // 'sub' (subject/user ID) must be present.
+            if ( !isset($decoded_token->sub) || empty($decoded_token->sub) ) {
+                error_log( 'Apple Auth Error: Token subject (sub) missing or empty.' );
+                return null;
+            }
+
+            // Optional: Nonce validation if you implement it.
+            // if ( !isset($decoded_token->nonce) || $decoded_token->nonce !== $_SESSION['apple_auth_nonce_expected'] ) { // Assuming you stored a nonce
+            //     error_log( 'Apple Auth Error: Token nonce mismatch.' );
+            //     return null;
+            // }
+
+            return $decoded_token; // Success
+
+        } catch (ExpiredException $e) {
+            error_log( 'Apple Auth Error: ID token expired. Message: ' . $e->getMessage() );
+        } catch (SignatureInvalidException $e) {
+            error_log( 'Apple Auth Error: ID token signature invalid. Message: ' . $e->getMessage() );
+        } catch (BeforeValidException $e) {
+            error_log( 'Apple Auth Error: ID token not yet valid (e.g., nbf claim). Message: ' . $e->getMessage() );
+        } catch (Exception $e) { // Catching \Firebase\JWT\InvalidArgumentException and other generic \Exception
+            error_log( 'Apple Auth Error: ID token decoding failed. Message: ' . $e->getMessage() . ' Trace: ' . $e->getTraceAsString() );
+        }
+
+        return null; // Return null on any failure
     }
 
 

@@ -53,10 +53,10 @@ class CLS_Google_Auth {
             }
 
             // Generate state for CSRF protection (optional but recommended)
-            // if ( ! session_id() ) {
-            //     session_start();
-            // }
-            // $_SESSION['google_oauth_state'] = bin2hex( random_bytes(16) );
+            if (session_status() == PHP_SESSION_NONE) {
+                session_start();
+            }
+            $_SESSION['google_oauth_state'] = bin2hex( random_bytes(16) );
 
             $params = array(
                 'client_id'     => $google_client_id,
@@ -65,7 +65,7 @@ class CLS_Google_Auth {
                 'response_type' => 'code',
                 'access_type'   => 'offline',
                 'prompt'        => 'select_account',
-                // 'state'         => $_SESSION['google_oauth_state'] // Add state to params
+                'state'         => $_SESSION['google_oauth_state'] // Add state to params
             );
             $google_oauth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query( $params );
 
@@ -85,12 +85,16 @@ class CLS_Google_Auth {
             return;
         }
 
+        if (session_status() == PHP_SESSION_NONE) {
+            session_start();
+        }
+
         // Verify state for CSRF (if implemented)
-        // if ( ! isset( $_GET['state'] ) || ! isset( $_SESSION['google_oauth_state'] ) || $_GET['state'] !== $_SESSION['google_oauth_state'] ) {
-        //     // Log this attempt or show an error
-        //     wp_die( 'Invalid state parameter. CSRF attempt?' );
-        // }
-        // unset( $_SESSION['google_oauth_state'] ); // Clean up state
+        if ( ! isset( $_GET['state'] ) || ! isset( $_SESSION['google_oauth_state'] ) || $_GET['state'] !== $_SESSION['google_oauth_state'] ) {
+            // Log this attempt or show an error
+            wp_die( 'Invalid state parameter. CSRF attempt?' );
+        }
+        unset( $_SESSION['google_oauth_state'] ); // Clean up state
 
         $code = sanitize_text_field( $_GET['code'] );
 
@@ -173,6 +177,9 @@ class CLS_Google_Auth {
             wp_set_auth_cookie( $user->ID );
             update_user_meta( $user->ID, 'google_user_id', $google_user_id ); // Update Google ID if needed
             // Potentially update other details like name if they've changed in Google
+            $redirect_url = cls_handle_social_login_redirect( $user->ID ); // Redirect for existing user
+            wp_redirect( $redirect_url );
+            exit;
         } else {
             // User does not exist, create a new user
             $username = $this->generate_username_from_email( $email );
@@ -200,12 +207,16 @@ class CLS_Google_Auth {
             wp_set_auth_cookie( $user_id );
 
             // Optionally, send the new user an email about their account
-            // wp_new_user_notification( $user_id, null, 'both' );
+            wp_new_user_notification( $user_id, null, 'both' );
+            $redirect_url = cls_handle_social_login_redirect( $user_id ); // Redirect for new user
+            wp_redirect( $redirect_url );
+            exit;
         }
 
-        // Redirect user to the homepage or a specific dashboard page
-        wp_redirect( home_url() );
-        exit;
+        // This part should ideally not be reached if the logic above is correct.
+        // However, as a very last fallback, redirect to home.
+        // wp_redirect( home_url() );
+        // exit;
     }
 
     /**
